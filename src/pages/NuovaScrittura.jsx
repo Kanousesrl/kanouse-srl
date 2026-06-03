@@ -184,7 +184,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     }).filter(r => r.importo > 0 && r.conto)
   }
 
-  const totCompensi  const totCompensi = tipo === 'evento' ? compensi.reduce((s, c) => s + (parseFloat(c.importo) || 0), 0) : 0
+  const totCompensi = tipo === 'evento' ? compensi.reduce((s, c) => s + (parseFloat(c.importo) || 0), 0) : 0
   const totContributi = tipo === 'evento' ? compensi.reduce((s, c) => {
     const n = parseFloat(c.importo) || 0
     return s + Math.round(n * aliquotaPerCompenso(c)) / 100
