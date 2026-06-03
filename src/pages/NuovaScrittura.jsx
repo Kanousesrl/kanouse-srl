@@ -247,8 +247,21 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
       righe.push({ conto: contoRicavi, dare: 0, avere: imp, nota: 'Ricavo netto' });
       (compensiConConti || compensi).forEach(c => {
         const netto = parseFloat(c.importo) || 0
-        if (netto > 0) {
-          const oneri = righeOneriByConto(netto, c)
+        if (netto <= 0) return
+        const oneri = righeOneriByConto(netto, c)
+        // Controlla se il regime prevede IVA (almeno una voce punta a __iva_credito)
+        const hasIva = oneri.some(o => o.conto === '__iva_credito')
+        if (hasIva) {
+          // Regime fattura: Costi personale (imponibile) + IVA a credito + Debiti v/collaboratore (lordo)
+          const ivaCollab = oneri.filter(o => o.conto === '__iva_credito').reduce((s, o) => s + o.importo, 0)
+          const altriOneri = oneri.filter(o => o.conto !== '__iva_credito')
+          const totAltri = altriOneri.reduce((s, o) => s + o.importo, 0)
+          righe.push({ conto: '__costi_personale', dare: netto + totAltri, avere: 0, nota: 'Costo ' + c.nome })
+          righe.push({ conto: '__iva_credito', dare: ivaCollab, avere: 0, nota: 'IVA fattura ' + c.nome })
+          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto + ivaCollab, nota: 'Debito lordo ' + c.nome })
+          altriOneri.forEach(o => righe.push({ conto: o.conto, dare: 0, avere: o.importo, nota: o.nota }))
+        } else {
+          // Regime standard: Costi personale (netto + oneri) + Debiti v/collaboratore (netto) + fondi oneri
           const totOneri = oneri.reduce((s, o) => s + o.importo, 0)
           righe.push({ conto: '__costi_personale', dare: netto + totOneri, avere: 0, nota: 'Costo ' + c.nome })
           righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto, nota: 'Debito netto ' + c.nome })
