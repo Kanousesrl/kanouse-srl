@@ -142,10 +142,36 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     imp = inputVal; iva = needsIva ? calcolaIva(imp, aliquota) : 0; totLordo = imp + iva
   }
 
+  function regimePerCompenso(c) {
+    if (!c.regimeId) return null
+    return regimi.find(r => r.id === parseInt(c.regimeId)) || null
+  }
+
   function aliquotaPerCompenso(c) {
-    if (!c.regimeId) return 21
-    const reg = regimi.find(r => r.id === parseInt(c.regimeId))
+    const reg = regimePerCompenso(c)
     return reg ? (reg.percentuale_totale || 21) : 21
+  }
+
+  function righeOneriByConto(netto, c) {
+    const reg = regimePerCompenso(c)
+    if (!reg || !reg.voci?.length) {
+      return [{ conto: '__fondo_contributi', importo: Math.round(netto * 21) / 100, nota: 'Contributi azienda ' + c.nome }]
+    }
+    const ctx = { netto }
+    return (reg.voci || []).map(v => {
+      let base = 0
+      try {
+        let expr = (v.base || '0').trim().toLowerCase()
+        Object.entries(ctx).forEach(([k, val]) => {
+          expr = expr.replace(new RegExp('\b' + k + '\b', 'g'), String(val))
+        })
+        if (/^[0-9+-*/.() ]+$/.test(expr)) base = new Function('return (' + expr + ')')()
+      } catch { base = 0 }
+      const risultato = Math.round(base * (parseFloat(v.percentuale) || 0)) / 100
+      const chiave = (v.nome || '').toLowerCase().replace(/s+/g, '_').replace(/[^a-z0-9_]/g, '')
+      if (chiave) ctx[chiave] = risultato
+      return { conto: v.contoDest || '__fondo_contributi', importo: risultato, nota: (v.nome || 'Onere') + ' ' + c.nome }
+    }).filter(r => r.importo > 0 && r.conto)
   }
 
   const totCompensi = tipo === 'evento' ? compensi.reduce((s, c) => s + (parseFloat(c.importo) || 0), 0) : 0
@@ -222,10 +248,11 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
       (compensiConConti || compensi).forEach(c => {
         const netto = parseFloat(c.importo) || 0
         if (netto > 0) {
-          const contributi = Math.round(netto * aliquotaPerCompenso(c)) / 100
-          righe.push({ conto: '__costi_personale', dare: netto + contributi, avere: 0, nota: `Costo ${c.nome}` })
-          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto, nota: `Debito netto ${c.nome}` })
-          if (contributi > 0) righe.push({ conto: '__fondo_contributi', dare: 0, avere: contributi, nota: `Contributi azienda ${c.nome}` })
+          const oneri = righeOneriByConto(netto, c)
+          const totOneri = oneri.reduce((s, o) => s + o.importo, 0)
+          righe.push({ conto: '__costi_personale', dare: netto + totOneri, avere: 0, nota: 'Costo ' + c.nome })
+          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto, nota: 'Debito netto ' + c.nome })
+          oneri.forEach(o => righe.push({ conto: o.conto, dare: 0, avere: o.importo, nota: o.nota }))
         }
       })
     }
@@ -255,9 +282,21 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     if (tipo === 'pagamento_dipendente') {
       (compensiConConti || compensi).forEach(c => {
         const netto = parseFloat(c.importo) || 0
+        const aliqC = parseInt(c.aliquota) || 0
         if (netto > 0) {
-          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: netto, avere: 0, nota: `Estinzione debito ${c.nome}` })
-          righe.push({ conto: contoLiq, dare: 0, avere: netto, nota: `Pagamento ${c.nome}` })
+          let ivaC = 0, totC = netto
+          if (aliqC > 0) {
+            if (c.modeIva === 'lordo') {
+              ivaC = Math.round(netto - netto / (1 + aliqC / 100) * 100) / 100
+              totC = netto
+            } else {
+              ivaC = Math.round(netto * aliqC) / 100
+              totC = netto + ivaC
+            }
+          }
+          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: netto, avere: 0, nota: 'Estinzione debito ' + c.nome })
+          if (ivaC > 0) righe.push({ conto: '__iva_credito', dare: ivaC, avere: 0, nota: 'IVA fattura ' + c.nome })
+          righe.push({ conto: contoLiq, dare: 0, avere: totC, nota: 'Pagamento ' + c.nome })
         }
       })
     }
@@ -511,30 +550,55 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                 Se il collaboratore non ha ancora un mastrino, verrà creato automaticamente al salvataggio.
               </div>
               {compensi.map((c, i) => (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 1fr 1fr 32px', gap: 8, marginBottom: 8, alignItems: 'end' }}>
-                  <div>
-                    {i === 0 && <label>Nome</label>}
-                    <input type="text" value={c.nome} onChange={e => { const n = [...compensi]; n[i].nome = e.target.value; setCompensi(n) }} placeholder="Nome collaboratore" />
+                <div key={i} style={{ background: 'var(--bg-secondary)', borderRadius: 'var(--radius)', padding: '10px', marginBottom: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 1fr 1fr 32px', gap: 8, marginBottom: tipo === 'pagamento_dipendente' ? 8 : 0, alignItems: 'end' }}>
+                    <div>
+                      {i === 0 && <label>Nome</label>}
+                      <input type="text" value={c.nome} onChange={e => { const n = [...compensi]; n[i].nome = e.target.value; setCompensi(n) }} placeholder="Nome collaboratore" />
+                    </div>
+                    <div>
+                      {i === 0 && <label>Importo (€)</label>}
+                      <input type="number" value={c.importo} onChange={e => { const n = [...compensi]; n[i].importo = e.target.value; setCompensi(n) }} placeholder="0.00" step="0.01" />
+                    </div>
+                    <div>
+                      {i === 0 && <label>Conto debito</label>}
+                      <NomeContoSelect value={c.contoDebito} onChange={v => { const n = [...compensi]; n[i].contoDebito = v; setCompensi(n) }}
+                        placeholder="Auto (crea mastrino)" filterFn={c => c.tipo === 'debito_dipendente' || c.tipo === 'passivo'} />
+                    </div>
+                    <div>
+                      {i === 0 && <label>{tipo === 'pagamento_dipendente' ? 'IVA %' : 'Regime'}</label>}
+                      {tipo === 'pagamento_dipendente' ? (
+                        <select value={c.aliquota || '0'} onChange={e => { const n = [...compensi]; n[i].aliquota = e.target.value; setCompensi(n) }}>
+                          <option value="0">Nessuna IVA</option>
+                          <option value="10">10%</option>
+                          <option value="22">22%</option>
+                        </select>
+                      ) : (
+                        <select value={c.regimeId} onChange={e => { const n = [...compensi]; n[i].regimeId = e.target.value; setCompensi(n) }}>
+                          <option value="">Default (21%)</option>
+                          {regimi.map(r => <option key={r.id} value={r.id}>{r.nome} ({r.percentuale_totale}%)</option>)}
+                        </select>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                      <button className="btn btn-sm btn-danger" onClick={() => setCompensi(compensi.filter((_, j) => j !== i))} aria-label="Rimuovi"><i className="ti ti-x" aria-hidden="true" /></button>
+                    </div>
                   </div>
-                  <div>
-                    {i === 0 && <label>Netto (€)</label>}
-                    <input type="number" value={c.importo} onChange={e => { const n = [...compensi]; n[i].importo = e.target.value; setCompensi(n) }} placeholder="0.00" step="0.01" />
-                  </div>
-                  <div>
-                    {i === 0 && <label>Conto debito</label>}
-                    <NomeContoSelect value={c.contoDebito} onChange={v => { const n = [...compensi]; n[i].contoDebito = v; setCompensi(n) }}
-                      placeholder="Auto (crea mastrino)" filterFn={c => c.tipo === 'debito_dipendente' || c.tipo === 'passivo'} />
-                  </div>
-                  <div>
-                    {i === 0 && <label>Regime</label>}
-                    <select value={c.regimeId} onChange={e => { const n = [...compensi]; n[i].regimeId = e.target.value; setCompensi(n) }}>
-                      <option value="">Default (21%)</option>
-                      {regimi.map(r => <option key={r.id} value={r.id}>{r.nome} ({r.percentuale_totale}%)</option>)}
-                    </select>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-                    <button className="btn btn-sm btn-danger" onClick={() => setCompensi(compensi.filter((_, j) => j !== i))} aria-label="Rimuovi"><i className="ti ti-x" aria-hidden="true" /></button>
-                  </div>
+                  {tipo === 'pagamento_dipendente' && parseInt(c.aliquota) > 0 && parseFloat(c.importo) > 0 && (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <button className={'btn btn-sm' + (c.modeIva !== 'lordo' ? ' btn-primary' : '')} onClick={() => { const n = [...compensi]; n[i].modeIva = 'imponibile'; setCompensi(n) }}>Imponibile</button>
+                      <button className={'btn btn-sm' + (c.modeIva === 'lordo' ? ' btn-primary' : '')} onClick={() => { const n = [...compensi]; n[i].modeIva = 'lordo'; setCompensi(n) }}>Lordo (scorporo)</button>
+                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        IVA: {fmtEur(c.modeIva === 'lordo'
+                          ? parseFloat(c.importo) - parseFloat(c.importo) / (1 + parseInt(c.aliquota) / 100)
+                          : parseFloat(c.importo) * parseInt(c.aliquota) / 100
+                        )} — Totale: {fmtEur(c.modeIva === 'lordo'
+                          ? parseFloat(c.importo)
+                          : parseFloat(c.importo) * (1 + parseInt(c.aliquota) / 100)
+                        )}
+                      </span>
+                    </div>
+                  )}
                 </div>
               ))}
               {totCompensi > 0 && tipo === 'evento' && (
