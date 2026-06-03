@@ -165,7 +165,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
         Object.entries(ctx).forEach(([k, val]) => {
           expr = expr.replace(new RegExp('\b' + k + '\b', 'g'), String(val))
         })
-        if (/^[0-9+-*/.() ]+$/.test(expr)) base = new Function('return (' + expr + ')')()
+        if (/^[0-9+\-*/.() ]+$/.test(expr)) base = new Function('return (' + expr + ')')()
       } catch { base = 0 }
       const risultato = Math.round(base * (parseFloat(v.percentuale) || 0)) / 100
       const chiave = (v.nome || '').toLowerCase().replace(/s+/g, '_').replace(/[^a-z0-9_]/g, '')
