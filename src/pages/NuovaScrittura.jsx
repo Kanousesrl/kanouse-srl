@@ -158,6 +158,12 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
       return [{ conto: '__fondo_contributi', importo: Math.round(netto * 21) / 100, nota: 'Contributi azienda ' + c.nome }]
     }
     const ctx = { netto }
+    // Mappa nomi leggibili dei conti sistema al loro id interno
+    const nomiSistema = {
+      'iva_a_credito': '__iva_credito', 'iva_credito': '__iva_credito',
+      'fondo_contributi': '__fondo_contributi', 'fondo_imposte': '__fondo_tasse',
+      'iva_a_debito': '__iva_debito', 'costi_del_personale': '__costi_personale',
+    }
     return (reg.voci || []).map(v => {
       let base = 0
       try {
@@ -168,13 +174,17 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
         if (/^[0-9+\-*/.() ]+$/.test(expr)) base = new Function('return (' + expr + ')')()
       } catch { base = 0 }
       const risultato = Math.round(base * (parseFloat(v.percentuale) || 0)) / 100
-      const chiave = (v.nome || '').toLowerCase().replace(/s+/g, '_').replace(/[^a-z0-9_]/g, '')
+      const chiave = (v.nome || '').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
       if (chiave) ctx[chiave] = risultato
-      return { conto: v.contoDest || '__fondo_contributi', importo: risultato, nota: (v.nome || 'Onere') + ' ' + c.nome }
+      // Normalizza contoDest: può essere id (__iva_credito) o nome leggibile (IVA a credito)
+      const raw = (v.contoDest || '').trim()
+      const normalizzato = raw.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+      const contoFinale = raw.startsWith('__') ? raw : (nomiSistema[normalizzato] || raw || '__fondo_contributi')
+      return { conto: contoFinale, importo: risultato, nota: (v.nome || 'Onere') + ' ' + c.nome }
     }).filter(r => r.importo > 0 && r.conto)
   }
 
-  const totCompensi = tipo === 'evento' ? compensi.reduce((s, c) => s + (parseFloat(c.importo) || 0), 0) : 0
+  const totCompensi  const totCompensi = tipo === 'evento' ? compensi.reduce((s, c) => s + (parseFloat(c.importo) || 0), 0) : 0
   const totContributi = tipo === 'evento' ? compensi.reduce((s, c) => {
     const n = parseFloat(c.importo) || 0
     return s + Math.round(n * aliquotaPerCompenso(c)) / 100
