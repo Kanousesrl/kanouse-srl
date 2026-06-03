@@ -4,18 +4,18 @@ import { verificaBilancio, fmtEur } from '../lib/contabilita.js'
 import { useToast } from '../lib/toast.jsx'
 
 const TIPI_OP = [
-  { value: 'evento', label: 'Evento (wedding / La Serra)', icon: 'ti-music' },
-  { value: 'corrispettivi', label: 'Corrispettivi giornalieri', icon: 'ti-receipt' },
-  { value: 'fattura_emessa', label: 'Fattura emessa', icon: 'ti-file-invoice' },
-  { value: 'incasso_fattura', label: 'Incasso fattura cliente', icon: 'ti-cash' },
-  { value: 'fattura_ricevuta', label: 'Fattura ricevuta (acquisto)', icon: 'ti-file-download' },
-  { value: 'pagamento_fornitore', label: 'Pagamento fornitore', icon: 'ti-truck-delivery' },
-  { value: 'pagamento_dipendente', label: 'Pagamento dipendente/collaboratore', icon: 'ti-user-dollar' },
-  { value: 'acquisto_attrezzatura', label: 'Acquisto attrezzatura', icon: 'ti-tool' },
-  { value: 'capitale_sociale', label: 'Capitale sociale (sottoscrizione/versamento)', icon: 'ti-building' },
-  { value: 'acconto_tasse', label: 'Accantonamento tasse', icon: 'ti-percentage' },
-  { value: 'utilizzo_fondo', label: 'Utilizzo fondo accantonamento', icon: 'ti-arrow-up-right' },
-  { value: 'libera', label: 'Scrittura libera (avanzata)', icon: 'ti-pencil' },
+  { value: 'evento', label: 'Evento (wedding / La Serra)' },
+  { value: 'corrispettivi', label: 'Corrispettivi giornalieri' },
+  { value: 'fattura_emessa', label: 'Fattura emessa' },
+  { value: 'incasso_fattura', label: 'Incasso fattura cliente' },
+  { value: 'fattura_ricevuta', label: 'Fattura ricevuta (acquisto)' },
+  { value: 'pagamento_fornitore', label: 'Pagamento fornitore' },
+  { value: 'pagamento_dipendente', label: 'Pagamento dipendente/collaboratore' },
+  { value: 'acquisto_attrezzatura', label: 'Acquisto attrezzatura' },
+  { value: 'capitale_sociale', label: 'Capitale sociale (sottoscrizione/versamento)' },
+  { value: 'acconto_tasse', label: 'Accantonamento tasse' },
+  { value: 'utilizzo_fondo', label: 'Utilizzo fondo accantonamento' },
+  { value: 'libera', label: 'Scrittura libera (avanzata)' },
 ]
 
 const ALIQUOTE = [0, 4, 5, 10, 22]
@@ -40,15 +40,28 @@ const CONTI_SISTEMA = [
   { id: '__costi_accantonamenti', nome: 'Accantonamenti', tipo: 'costo' },
 ]
 
-function scorporaIva(lordo, aliquota) {
-  if (!aliquota) return { imponibile: lordo, iva: 0 }
-  const imponibile = Math.round((lordo / (1 + aliquota / 100)) * 100) / 100
-  const iva = Math.round((lordo - imponibile) * 100) / 100
-  return { imponibile, iva }
+// Normalizza un contoDest (può essere id __xxx o nome leggibile) all'id interno
+function normalizzaConto(raw) {
+  if (!raw) return '__fondo_contributi'
+  if (raw.startsWith('__')) return raw
+  const mappa = {
+    'iva a credito': '__iva_credito',
+    'iva a debito': '__iva_debito',
+    'fondo contributi': '__fondo_contributi',
+    'fondo imposte': '__fondo_tasse',
+    'costi del personale': '__costi_personale',
+    'acquisti e forniture': '__costi_acquisti',
+    'debiti verso fornitori': '__debiti_fornitori',
+    'accantonamenti': '__costi_accantonamenti',
+  }
+  return mappa[raw.toLowerCase().trim()] || raw
 }
 
-function calcolaIva(imponibile, aliquota) {
-  return Math.round(imponibile * aliquota) / 100
+function scorporaIva(lordo, aliquota) {
+  if (!aliquota) return { imponibile: lordo, iva: 0 }
+  const imponibile = Math.round(lordo / (1 + aliquota / 100) * 100) / 100
+  const iva = Math.round((lordo - imponibile) * 100) / 100
+  return { imponibile, iva }
 }
 
 function rigaVuota() { return { conto: '', dare: '', avere: '', nota: '' } }
@@ -59,27 +72,20 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
   const [attivita, setAttivita] = useState('wedding')
   const [data, setData] = useState(new Date().toISOString().split('T')[0])
   const [descrizione, setDescrizione] = useState('')
-  // Importo principale
-  const [importoMode, setImportoMode] = useState('imponibile') // 'imponibile' | 'lordo'
+  const [importoMode, setImportoMode] = useState('imponibile')
   const [importoInput, setImportoInput] = useState('')
   const [aliquota, setAliquota] = useState(10)
   const [contoLiquidita, setContoLiquidita] = useState('__banca')
-  // Compensi
   const [compensi, setCompensi] = useState([
     { nome: 'Alessandro', contoDebito: '', importo: '', regimeId: '' },
     { nome: 'Santino', contoDebito: '', importo: '', regimeId: '' },
     { nome: 'Roberto', contoDebito: '', importo: '', regimeId: '' },
   ])
-  // Costi aggiuntivi (con IVA)
   const [costi, setCosti] = useState([])
-  // Accantonamenti
   const [accantonamenti, setAccantonamenti] = useState([])
-  // Capitale sociale
   const [capTotale, setCapTotale] = useState('12000')
   const [capVersato, setCapVersato] = useState('3000')
-  // Scrittura libera
   const [righeLibere, setRigheLibere] = useState([rigaVuota(), rigaVuota()])
-  // Dati ausiliari
   const [modelli, setModelli] = useState([])
   const [mastrini, setMastrini] = useState([])
   const [regimi, setRegimi] = useState([])
@@ -139,9 +145,12 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     const r = scorporaIva(inputVal, aliquota)
     imp = r.imponibile; iva = r.iva; totLordo = inputVal
   } else {
-    imp = inputVal; iva = needsIva ? calcolaIva(imp, aliquota) : 0; totLordo = imp + iva
+    imp = inputVal
+    iva = needsIva ? Math.round(imp * aliquota) / 100 : 0
+    totLordo = imp + iva
   }
 
+  // Regime per compenso
   function regimePerCompenso(c) {
     if (!c.regimeId) return null
     return regimi.find(r => r.id === parseInt(c.regimeId)) || null
@@ -152,34 +161,34 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     return reg ? (reg.percentuale_totale || 21) : 21
   }
 
-  function righeOneriByConto(netto, c) {
+  // Calcola le righe oneri per un compenso usando il regime
+  // Restituisce array di { conto, importo, nota }
+  function calcolaOneri(netto, c) {
     const reg = regimePerCompenso(c)
-    if (!reg || !reg.voci?.length) {
+    if (!reg || !reg.voci || reg.voci.length === 0) {
       return [{ conto: '__fondo_contributi', importo: Math.round(netto * 21) / 100, nota: 'Contributi azienda ' + c.nome }]
     }
     const ctx = { netto }
-    // Mappa nomi leggibili dei conti sistema al loro id interno
-    const nomiSistema = {
-      'iva_a_credito': '__iva_credito', 'iva_credito': '__iva_credito',
-      'fondo_contributi': '__fondo_contributi', 'fondo_imposte': '__fondo_tasse',
-      'iva_a_debito': '__iva_debito', 'costi_del_personale': '__costi_personale',
-    }
-    return (reg.voci || []).map(v => {
+    return reg.voci.map(v => {
+      // Valuta la base come espressione
       let base = 0
       try {
         let expr = (v.base || '0').trim().toLowerCase()
+        // Sostituisce variabili con i loro valori
         Object.entries(ctx).forEach(([k, val]) => {
-          expr = expr.replace(new RegExp('\b' + k + '\b', 'g'), String(val))
+          expr = expr.replace(new RegExp('\\b' + k + '\\b', 'g'), String(val))
         })
-        if (/^[0-9+\-*/.() ]+$/.test(expr)) base = new Function('return (' + expr + ')')()
-      } catch { base = 0 }
+        // Accetta solo espressioni numeriche sicure
+        if (/^[\d+\-*/.() ]+$/.test(expr)) {
+          base = new Function('"use strict"; return (' + expr + ')')()
+        }
+      } catch (e) { base = 0 }
       const risultato = Math.round(base * (parseFloat(v.percentuale) || 0)) / 100
+      // Aggiunge questa voce al contesto per le voci successive
       const chiave = (v.nome || '').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
       if (chiave) ctx[chiave] = risultato
-      // Normalizza contoDest: può essere id (__iva_credito) o nome leggibile (IVA a credito)
-      const raw = (v.contoDest || '').trim()
-      const normalizzato = raw.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
-      const contoFinale = raw.startsWith('__') ? raw : (nomiSistema[normalizzato] || raw || '__fondo_contributi')
+      // Normalizza il conto di destinazione
+      const contoFinale = normalizzaConto(v.contoDest)
       return { conto: contoFinale, importo: risultato, nota: (v.nome || 'Onere') + ' ' + c.nome }
     }).filter(r => r.importo > 0 && r.conto)
   }
@@ -190,7 +199,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     return s + Math.round(n * aliquotaPerCompenso(c)) / 100
   }, 0) : 0
 
-  // Costi con IVA
+  // Costi aggiuntivi con IVA
   const costiCalcolati = costi.map(c => {
     const inputC = parseFloat(c.importo) || 0
     if (c.modeIva === 'lordo' && (parseInt(c.aliquota) || 0) > 0) {
@@ -205,43 +214,32 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
   const totAccantonamenti = accantonamenti.reduce((s, a) => s + (parseFloat(a.importo) || 0), 0)
   const cassaFinale = totLordo - iva - totCompensi - totContributi - totCostiLordi - totAccantonamenti
 
-  // Assicura che esista il mastrino per il compenso e ritorna il suo id
   async function assicuraMastrino(nome) {
     if (!nome.trim()) return null
-    const nomeM = `Debiti v/${nome.trim()}`
-    // Controlla se esiste già
+    const nomeM = 'Debiti v/' + nome.trim()
     const { data: existing } = await supabase.from('mastrini').select('id').eq('nome', nomeM).single()
     if (existing) return String(existing.id)
-    // Crea nuovo
     const { data: nuovo } = await supabase.from('mastrini').insert([{ nome: nomeM, tipo: 'debito_dipendente', sistema: false }]).select().single()
     return nuovo ? String(nuovo.id) : null
   }
 
-  function contoNome(id) {
-    const found = tuttiConti.find(c => String(c.id) === String(id))
-    return found ? found.nome : id
-  }
-
-  function generaRighe(compensiConConti) {
+  function generaRighe(compensiDaUsare) {
     const contoLiq = contoLiquidita
     const contoRicavi = attivita === 'serra' ? '__ricavi_serra' : '__ricavi_wedding'
+    const lista = compensiDaUsare || compensi
 
     if (tipo === 'libera') {
-      return righeLibere.filter(r => r.conto && (parseFloat(r.dare) > 0 || parseFloat(r.avere) > 0))
+      return righeLibere
+        .filter(r => r.conto && (parseFloat(r.dare) > 0 || parseFloat(r.avere) > 0))
         .map(r => ({ conto: r.conto, dare: parseFloat(r.dare) || 0, avere: parseFloat(r.avere) || 0, nota: r.nota || '' }))
     }
 
-    // Capitale sociale — scrittura corretta in 2 fasi
     if (tipo === 'capitale_sociale') {
       const tot = parseFloat(capTotale) || 0
       const vers = parseFloat(capVersato) || 0
-      const residuo = tot - vers
       const righe = []
-      // Fase 1: Sottoscrizione — Soci c/sottoscrizione (Dare) → Capitale Sociale (Avere)
       righe.push({ conto: '__soci_sott', dare: tot, avere: 0, nota: 'Sottoscrizione capitale' })
       righe.push({ conto: '__capitale_sociale', dare: 0, avere: tot, nota: 'Capitale sociale sottoscritto' })
-      // Fase 2: Versamento parziale — Banca (Dare) → Soci c/sottoscrizione (Avere)
-      // Il saldo residuo rimane aperto in Soci c/sottoscrizione fino al saldo completo
       if (vers > 0) {
         righe.push({ conto: contoLiq, dare: vers, avere: 0, nota: 'Versamento quota' })
         righe.push({ conto: '__soci_sott', dare: 0, avere: vers, nota: 'Versamento quota' })
@@ -253,40 +251,41 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
 
     if (tipo === 'evento') {
       righe.push({ conto: contoLiq, dare: totLordo, avere: 0, nota: 'Incasso lordo' })
-      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: `IVA ${aliquota}%` })
-      righe.push({ conto: contoRicavi, dare: 0, avere: imp, nota: 'Ricavo netto' });
-      (compensiConConti || compensi).forEach(c => {
+      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: 'IVA ' + aliquota + '%' })
+      righe.push({ conto: contoRicavi, dare: 0, avere: imp, nota: 'Ricavo netto' })
+      lista.forEach(c => {
         const netto = parseFloat(c.importo) || 0
         if (netto <= 0) return
-        const oneri = righeOneriByConto(netto, c)
-        // Controlla se il regime prevede IVA (almeno una voce punta a __iva_credito)
-        const hasIva = oneri.some(o => o.conto === '__iva_credito')
-        if (hasIva) {
-          // Regime fattura: Costi personale (imponibile) + IVA a credito + Debiti v/collaboratore (lordo)
-          const ivaCollab = oneri.filter(o => o.conto === '__iva_credito').reduce((s, o) => s + o.importo, 0)
-          const altriOneri = oneri.filter(o => o.conto !== '__iva_credito')
-          const totAltri = altriOneri.reduce((s, o) => s + o.importo, 0)
+        const oneri = calcolaOneri(netto, c)
+        // Controlla se c'è IVA a credito tra gli oneri (regime fattura)
+        const ivaOneri = oneri.filter(o => o.conto === '__iva_credito')
+        const altriOneri = oneri.filter(o => o.conto !== '__iva_credito')
+        const totIva = ivaOneri.reduce((s, o) => s + o.importo, 0)
+        const totAltri = altriOneri.reduce((s, o) => s + o.importo, 0)
+        if (totIva > 0) {
+          // Regime fattura: costo = imponibile, IVA a credito separata, debito = lordo
           righe.push({ conto: '__costi_personale', dare: netto + totAltri, avere: 0, nota: 'Costo ' + c.nome })
-          righe.push({ conto: '__iva_credito', dare: ivaCollab, avere: 0, nota: 'IVA fattura ' + c.nome })
-          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto + ivaCollab, nota: 'Debito lordo ' + c.nome })
+          righe.push({ conto: '__iva_credito', dare: totIva, avere: 0, nota: 'IVA fattura ' + c.nome })
+          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto + totIva, nota: 'Debito lordo ' + c.nome })
           altriOneri.forEach(o => righe.push({ conto: o.conto, dare: 0, avere: o.importo, nota: o.nota }))
         } else {
-          // Regime standard: Costi personale (netto + oneri) + Debiti v/collaboratore (netto) + fondi oneri
-          const totOneri = oneri.reduce((s, o) => s + o.importo, 0)
+          // Regime standard: netto + oneri in dare, netto in debito, oneri nei fondi
+          const totOneri = altriOneri.reduce((s, o) => s + o.importo, 0)
           righe.push({ conto: '__costi_personale', dare: netto + totOneri, avere: 0, nota: 'Costo ' + c.nome })
           righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: 0, avere: netto, nota: 'Debito netto ' + c.nome })
-          oneri.forEach(o => righe.push({ conto: o.conto, dare: 0, avere: o.importo, nota: o.nota }))
+          altriOneri.forEach(o => righe.push({ conto: o.conto, dare: 0, avere: o.importo, nota: o.nota }))
         }
       })
     }
+
     if (tipo === 'corrispettivi') {
       righe.push({ conto: contoLiq, dare: totLordo, avere: 0, nota: 'Corrispettivi' })
-      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: `IVA ${aliquota}%` })
+      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: 'IVA ' + aliquota + '%' })
       righe.push({ conto: contoRicavi, dare: 0, avere: imp, nota: 'Ricavo netto' })
     }
     if (tipo === 'fattura_emessa') {
       righe.push({ conto: '__crediti_clienti', dare: totLordo, avere: 0, nota: 'Credito verso cliente' })
-      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: `IVA ${aliquota}%` })
+      if (iva > 0) righe.push({ conto: '__iva_debito', dare: 0, avere: iva, nota: 'IVA ' + aliquota + '%' })
       righe.push({ conto: contoRicavi, dare: 0, avere: imp, nota: 'Ricavo' })
     }
     if (tipo === 'incasso_fattura') {
@@ -295,7 +294,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     }
     if (tipo === 'fattura_ricevuta') {
       righe.push({ conto: '__costi_acquisti', dare: imp, avere: 0, nota: 'Costo' })
-      if (iva > 0) righe.push({ conto: '__iva_credito', dare: iva, avere: 0, nota: `IVA ${aliquota}%` })
+      if (iva > 0) righe.push({ conto: '__iva_credito', dare: iva, avere: 0, nota: 'IVA ' + aliquota + '%' })
       righe.push({ conto: '__debiti_fornitori', dare: 0, avere: totLordo, nota: 'Debito fornitore' })
     }
     if (tipo === 'pagamento_fornitore') {
@@ -303,29 +302,28 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
       righe.push({ conto: contoLiq, dare: 0, avere: imp, nota: 'Pagamento' })
     }
     if (tipo === 'pagamento_dipendente') {
-      (compensiConConti || compensi).forEach(c => {
+      lista.forEach(c => {
         const netto = parseFloat(c.importo) || 0
+        if (netto <= 0) return
         const aliqC = parseInt(c.aliquota) || 0
-        if (netto > 0) {
-          let ivaC = 0, totC = netto
-          if (aliqC > 0) {
-            if (c.modeIva === 'lordo') {
-              ivaC = Math.round(netto - netto / (1 + aliqC / 100) * 100) / 100
-              totC = netto
-            } else {
-              ivaC = Math.round(netto * aliqC) / 100
-              totC = netto + ivaC
-            }
+        let ivaC = 0, totC = netto
+        if (aliqC > 0) {
+          if (c.modeIva === 'lordo') {
+            ivaC = Math.round((netto - netto / (1 + aliqC / 100)) * 100) / 100
+            totC = netto
+          } else {
+            ivaC = Math.round(netto * aliqC) / 100
+            totC = netto + ivaC
           }
-          righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: netto, avere: 0, nota: 'Estinzione debito ' + c.nome })
-          if (ivaC > 0) righe.push({ conto: '__iva_credito', dare: ivaC, avere: 0, nota: 'IVA fattura ' + c.nome })
-          righe.push({ conto: contoLiq, dare: 0, avere: totC, nota: 'Pagamento ' + c.nome })
         }
+        righe.push({ conto: c.contoDebito || '__debiti_fornitori', dare: netto, avere: 0, nota: 'Estinzione debito ' + c.nome })
+        if (ivaC > 0) righe.push({ conto: '__iva_credito', dare: ivaC, avere: 0, nota: 'IVA fattura ' + c.nome })
+        righe.push({ conto: contoLiq, dare: 0, avere: totC, nota: 'Pagamento ' + c.nome })
       })
     }
     if (tipo === 'acquisto_attrezzatura') {
       righe.push({ conto: '__attrezzature', dare: imp, avere: 0, nota: 'Immobilizzazione' })
-      if (iva > 0) righe.push({ conto: '__iva_credito', dare: iva, avere: 0, nota: `IVA ${aliquota}%` })
+      if (iva > 0) righe.push({ conto: '__iva_credito', dare: iva, avere: 0, nota: 'IVA ' + aliquota + '%' })
       righe.push({ conto: contoLiq, dare: 0, avere: totLordo, nota: 'Pagamento' })
     }
     if (tipo === 'acconto_tasse') {
@@ -342,7 +340,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     costiCalcolati.forEach(c => {
       if (c.totale > 0 && c.conto) {
         righe.push({ conto: c.conto, dare: c.imponibile, avere: 0, nota: c.nota || 'Costo' })
-        if (c.iva > 0) righe.push({ conto: '__iva_credito', dare: c.iva, avere: 0, nota: `IVA ${c.aliquota}%` })
+        if (c.iva > 0) righe.push({ conto: '__iva_credito', dare: c.iva, avere: 0, nota: 'IVA ' + c.aliquota + '%' })
         righe.push({ conto: contoLiq, dare: 0, avere: c.totale, nota: c.nota || 'Pagamento costo' })
       }
     })
@@ -352,8 +350,8 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
       accantonamenti.forEach(a => {
         const val = parseFloat(a.importo) || 0
         if (val > 0 && a.mastrinoId) {
-          righe.push({ conto: '__costi_accantonamenti', dare: val, avere: 0, nota: `Acc.to ${a.nome}` })
-          righe.push({ conto: a.mastrinoId, dare: 0, avere: val, nota: `Acc.to ${a.nome}` })
+          righe.push({ conto: '__costi_accantonamenti', dare: val, avere: 0, nota: 'Acc.to ' + (a.nome || '') })
+          righe.push({ conto: a.mastrinoId, dare: 0, avere: val, nota: 'Acc.to ' + (a.nome || '') })
         }
       })
     }
@@ -368,22 +366,17 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
     if (!righeAnteprima.length) return toast('Nessuna riga da registrare')
     if (!bilanciatoOk) return toast('La scrittura non è bilanciata')
     setSaving(true)
-
-    // Crea mastrini dipendenti automaticamente se mancano
     let compensiFinali = compensi
     if (['evento', 'pagamento_dipendente'].includes(tipo)) {
       compensiFinali = await Promise.all(compensi.map(async c => {
-        if (!c.nome.trim()) return c
-        if (c.contoDebito) return c
+        if (!c.nome.trim() || c.contoDebito) return c
         const id = await assicuraMastrino(c.nome)
         return { ...c, contoDebito: id || '' }
       }))
       setCompensi(compensiFinali)
       await caricaDati()
     }
-
     const righeFinali = generaRighe(compensiFinali)
-
     const payload = {
       tipo, attivita, data, descrizione,
       importo: imp, iva, aliquota,
@@ -496,22 +489,12 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
               <label>Descrizione</label>
               <input type="text" value={descrizione} onChange={e => setDescrizione(e.target.value)} placeholder="es. Matrimonio Esposito - Taranto" />
             </div>
-
             {tipo !== 'libera' && tipo !== 'capitale_sociale' && tipo !== 'pagamento_dipendente' && (
               <>
-                {/* Switch imponibile / lordo */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Inserisci:</span>
-                  <button
-                    className={`btn btn-sm${importoMode === 'imponibile' ? ' btn-primary' : ''}`}
-                    onClick={() => setImportoMode('imponibile')}
-                    disabled={!needsIva}
-                  >Imponibile</button>
-                  <button
-                    className={`btn btn-sm${importoMode === 'lordo' ? ' btn-primary' : ''}`}
-                    onClick={() => setImportoMode('lordo')}
-                    disabled={!needsIva}
-                  >Lordo (scorporo IVA)</button>
+                  <button className={'btn btn-sm' + (importoMode === 'imponibile' ? ' btn-primary' : '')} onClick={() => setImportoMode('imponibile')} disabled={!needsIva}>Imponibile</button>
+                  <button className={'btn btn-sm' + (importoMode === 'lordo' ? ' btn-primary' : '')} onClick={() => setImportoMode('lordo')} disabled={!needsIva}>Lordo (scorporo IVA)</button>
                 </div>
                 <div className="form-row form-row-3">
                   <div>
@@ -521,12 +504,12 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                   <div>
                     <label>Aliquota IVA</label>
                     <select value={aliquota} onChange={e => setAliquota(parseInt(e.target.value))} disabled={!needsIva}>
-                      {ALIQUOTE.map(a => <option key={a} value={a}>{a === 0 ? 'Esente / FC' : `${a}%`}</option>)}
+                      {ALIQUOTE.map(a => <option key={a} value={a}>{a === 0 ? 'Esente / FC' : a + '%'}</option>)}
                     </select>
                   </div>
                   <div>
                     <label>{importoMode === 'lordo' ? 'Imponibile / IVA' : 'IVA / Lordo'}</label>
-                    <input readOnly value={iva > 0 ? `${fmtEur(importoMode === 'lordo' ? imp : iva)} / ${fmtEur(importoMode === 'lordo' ? iva : totLordo)}` : fmtEur(imp)} style={{ fontWeight: 500 }} />
+                    <input readOnly value={iva > 0 ? (importoMode === 'lordo' ? fmtEur(imp) + ' / ' + fmtEur(iva) : fmtEur(iva) + ' / ' + fmtEur(totLordo)) : fmtEur(imp)} style={{ fontWeight: 500 }} />
                   </div>
                 </div>
               </>
@@ -538,19 +521,13 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
             <div className="card">
               <div style={{ fontWeight: 500, marginBottom: '0.75rem' }}>Capitale sociale</div>
               <div className="info-box" style={{ marginBottom: '0.75rem' }}>
-                Fase 1 — Sottoscrizione: Soci c/sottoscrizione (Dare) → Capitale Sociale (Avere)<br />
-                Fase 2 — Versamento: Banca (Dare) → Soci c/sottoscrizione (Avere)<br />
-                Il conto Soci c/sottoscrizione resta aperto (saldo positivo) finché non viene versato tutto il capitale.
+                Fase 1: Soci c/sottoscrizione (Dare) → Capitale Sociale (Avere)<br />
+                Fase 2: Banca (Dare) → Soci c/sottoscrizione (Avere)<br />
+                Il conto Soci c/sottoscrizione resta aperto fino al saldo completo.
               </div>
               <div className="form-row form-row-2">
-                <div>
-                  <label>Capitale totale sottoscritto (€)</label>
-                  <input type="number" value={capTotale} onChange={e => setCapTotale(e.target.value)} placeholder="12000" step="0.01" />
-                </div>
-                <div>
-                  <label>Quota già versata (€)</label>
-                  <input type="number" value={capVersato} onChange={e => setCapVersato(e.target.value)} placeholder="3000" step="0.01" />
-                </div>
+                <div><label>Capitale totale sottoscritto (€)</label><input type="number" value={capTotale} onChange={e => setCapTotale(e.target.value)} placeholder="12000" step="0.01" /></div>
+                <div><label>Quota già versata (€)</label><input type="number" value={capVersato} onChange={e => setCapVersato(e.target.value)} placeholder="3000" step="0.01" /></div>
               </div>
               {parseFloat(capTotale) > 0 && (
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
@@ -586,7 +563,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                     <div>
                       {i === 0 && <label>Conto debito</label>}
                       <NomeContoSelect value={c.contoDebito} onChange={v => { const n = [...compensi]; n[i].contoDebito = v; setCompensi(n) }}
-                        placeholder="Auto (crea mastrino)" filterFn={c => c.tipo === 'debito_dipendente' || c.tipo === 'passivo'} />
+                        placeholder="Auto (crea mastrino)" filterFn={x => x.tipo === 'debito_dipendente' || x.tipo === 'passivo'} />
                     </div>
                     <div>
                       {i === 0 && <label>{tipo === 'pagamento_dipendente' ? 'IVA %' : 'Regime'}</label>}
@@ -626,13 +603,13 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
               ))}
               {totCompensi > 0 && tipo === 'evento' && (
                 <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
-                  Compensi: <strong>{fmtEur(totCompensi)}</strong> — Contributi azienda: <strong style={{ color: 'var(--amber)' }}>{fmtEur(totContributi)}</strong>
+                  Compensi: <strong>{fmtEur(totCompensi)}</strong> — Oneri azienda: <strong style={{ color: 'var(--amber)' }}>{fmtEur(totContributi)}</strong>
                 </div>
               )}
             </div>
           )}
 
-          {/* Costi aggiuntivi con IVA */}
+          {/* Costi aggiuntivi */}
           {tipo !== 'libera' && tipo !== 'capitale_sociale' && (
             <div className="card">
               <div className="row-between" style={{ marginBottom: '0.75rem' }}>
@@ -658,7 +635,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                       <div>
                         {i === 0 && <label>IVA %</label>}
                         <select value={c.aliquota} onChange={e => { const n = [...costi]; n[i].aliquota = e.target.value; setCosti(n) }}>
-                          {ALIQUOTE.map(a => <option key={a} value={a}>{a === 0 ? 'Esente' : `${a}%`}</option>)}
+                          {ALIQUOTE.map(a => <option key={a} value={a}>{a === 0 ? 'Esente' : a + '%'}</option>)}
                         </select>
                       </div>
                       <div>
@@ -671,11 +648,11 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                     </div>
                     {parseInt(c.aliquota) > 0 && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <button className={`btn btn-sm${c.modeIva === 'imponibile' ? ' btn-primary' : ''}`} onClick={() => { const n = [...costi]; n[i].modeIva = 'imponibile'; setCosti(n) }}>Imponibile</button>
-                        <button className={`btn btn-sm${c.modeIva === 'lordo' ? ' btn-primary' : ''}`} onClick={() => { const n = [...costi]; n[i].modeIva = 'lordo'; setCosti(n) }}>Lordo (scorporo)</button>
+                        <button className={'btn btn-sm' + (c.modeIva !== 'lordo' ? ' btn-primary' : '')} onClick={() => { const n = [...costi]; n[i].modeIva = 'imponibile'; setCosti(n) }}>Imponibile</button>
+                        <button className={'btn btn-sm' + (c.modeIva === 'lordo' ? ' btn-primary' : '')} onClick={() => { const n = [...costi]; n[i].modeIva = 'lordo'; setCosti(n) }}>Lordo (scorporo)</button>
                         {parseFloat(c.importo) > 0 && (
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                            Imponibile: {fmtEur(cc.imponibile)} — IVA: {fmtEur(cc.iva)} — Totale: {fmtEur(cc.totale)}
+                            Imp: {fmtEur(cc.imponibile)} — IVA: {fmtEur(cc.iva)} — Tot: {fmtEur(cc.totale)}
                           </span>
                         )}
                       </div>
@@ -722,7 +699,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
           {tipo === 'libera' && (
             <div className="card">
               <div className="row-between" style={{ marginBottom: '0.75rem' }}>
-                <span style={{ fontWeight: 500 }}>Righe contabili (dare / avere)</span>
+                <span style={{ fontWeight: 500 }}>Righe contabili</span>
                 <button className="btn btn-sm" onClick={() => setRigheLibere([...righeLibere, rigaVuota()])}>
                   <i className="ti ti-plus" aria-hidden="true" /> Riga
                 </button>
@@ -743,7 +720,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
           )}
         </div>
 
-        {/* RIGHT COLUMN */}
+        {/* Colonna destra */}
         <div className="stack">
           {tipo === 'evento' && imp > 0 && (
             <div className="card">
@@ -754,9 +731,9 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                 {compensi.map((c, i) => parseFloat(c.importo) > 0 && (
                   <div className="totale-row" key={i}><span>Compenso {c.nome}</span><span style={{ color: 'var(--red)' }}>− {fmtEur(parseFloat(c.importo))}</span></div>
                 ))}
-                {totContributi > 0 && <div className="totale-row"><span>Contributi azienda</span><span style={{ color: 'var(--amber)' }}>− {fmtEur(totContributi)}</span></div>}
+                {totContributi > 0 && <div className="totale-row"><span>Oneri azienda</span><span style={{ color: 'var(--amber)' }}>− {fmtEur(totContributi)}</span></div>}
                 {costiCalcolati.map((c, i) => c.totale > 0 && (
-                  <div className="totale-row" key={i}><span>{c.nota || 'Costo'}{c.iva > 0 ? ` (IVA ${c.aliquota}%)` : ''}</span><span style={{ color: 'var(--red)' }}>− {fmtEur(c.totale)}</span></div>
+                  <div className="totale-row" key={i}><span>{c.nota || 'Costo'}{c.iva > 0 ? ' (IVA ' + c.aliquota + '%)' : ''}</span><span style={{ color: 'var(--red)' }}>− {fmtEur(c.totale)}</span></div>
                 ))}
                 {accantonamenti.map((a, i) => parseFloat(a.importo) > 0 && (
                   <div className="totale-row" key={i}><span>Acc.to {a.nome || 'fondo'}</span><span style={{ color: 'var(--amber)' }}>− {fmtEur(parseFloat(a.importo))}</span></div>
@@ -783,7 +760,7 @@ export default function NuovaScrittura({ navigate, editId: editIdProp }) {
                 </div>
                 {righeAnteprima.map((r, i) => (
                   <div className="scrittura-row" key={i}>
-                    <span style={{ fontSize: 12 }}>{tuttiConti.find(c => String(c.id) === String(r.conto))?.nome || r.conto}{r.nota ? ` — ${r.nota}` : ''}</span>
+                    <span style={{ fontSize: 12 }}>{(tuttiConti.find(c => String(c.id) === String(r.conto))?.nome || r.conto)}{r.nota ? ' — ' + r.nota : ''}</span>
                     <span className="dare" style={{ textAlign: 'right', minWidth: 90, fontSize: 12 }}>{r.dare > 0 ? fmtEur(r.dare) : '—'}</span>
                     <span className="avere" style={{ textAlign: 'right', minWidth: 90, fontSize: 12 }}>{r.avere > 0 ? fmtEur(r.avere) : '—'}</span>
                   </div>
