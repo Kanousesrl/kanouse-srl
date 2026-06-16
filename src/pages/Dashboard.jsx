@@ -4,14 +4,19 @@ import { calcolaSaldi, fmtEur } from '../lib/contabilita.js'
 
 export default function Dashboard({ navigate }) {
   const [movimenti, setMovimenti] = useState([])
+  const [mastrini, setMastrini] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { carica() }, [])
 
   async function carica() {
     setLoading(true)
-    const { data } = await supabase.from('movimenti').select('*').order('data', { ascending: false })
-    setMovimenti(data || [])
+    const [{ data: mov }, { data: mast }] = await Promise.all([
+      supabase.from('movimenti').select('*').order('data', { ascending: false }),
+      supabase.from('mastrini').select('*'),
+    ])
+    setMovimenti(mov || [])
+    setMastrini(mast || [])
     setLoading(false)
   }
 
@@ -24,7 +29,19 @@ export default function Dashboard({ navigate }) {
   const fondoTasse = saldi['__fondo_tasse'] || 0
   const fondoContributi = saldi['__fondo_contributi'] || 0
 
-  // Ricavi e costi da tutti i conti con prefisso ricavi/costi
+  // Debiti verso dipendenti/collaboratori (mastrini custom tipo debito_dipendente)
+  const idDebitiDipendenti = mastrini.filter(m => m.tipo === 'debito_dipendente').map(m => String(m.id))
+  const totDebitiDipendenti = idDebitiDipendenti.reduce((s, id) => s + Math.abs(saldi[id] || 0), 0)
+
+  // Tutti i fondi accantonamento (di sistema + custom)
+  const idFondiCustom = mastrini.filter(m => m.tipo === 'fondo_accantonamento').map(m => String(m.id))
+  const totFondiCustom = idFondiCustom.reduce((s, id) => s + Math.abs(saldi[id] || 0), 0)
+  const totFondi = Math.abs(fondoTasse) + Math.abs(fondoContributi) + totFondiCustom
+
+  // Liquidità disponibile = Banca+Cassa - Debiti dipendenti - Fondi - (IVA debito - IVA credito)
+  const liquiditaDisponibile = banca - totDebitiDipendenti - totFondi - ivaNetta
+
+  // Ricavi e costi
   const ricaviTot = Object.entries(saldi).filter(([k]) => k.includes('ricavi')).reduce((s, [, v]) => s + Math.abs(v), 0)
   const costiTot = Object.entries(saldi).filter(([k]) => k.includes('costi')).reduce((s, [, v]) => s + v, 0)
   const utile = ricaviTot - costiTot
@@ -35,9 +52,6 @@ export default function Dashboard({ navigate }) {
   const balanced = Math.abs(sigma) < 0.01
 
   const ultimi = movimenti.slice(0, 8)
-
-  // Fondi accantonamento custom
-  const fondiCustom = Object.entries(saldi).filter(([k]) => !k.startsWith('__') && saldi[k] !== 0)
 
   if (loading) return <div className="loading"><i className="ti ti-loader" />Caricamento...</div>
 
@@ -53,9 +67,45 @@ export default function Dashboard({ navigate }) {
         </div>
       </div>
 
+      {/* Card Liquidità disponibile */}
+      <div className="card" style={{ marginBottom: '1.5rem', background: 'var(--bg-secondary)' }}>
+        <div className="row-between" style={{ alignItems: 'flex-start' }}>
+          <div>
+            <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 4 }}>Liquidità disponibile</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              Banca + Cassa − Debiti collaboratori − Fondi accantonamento − Saldo IVA
+            </div>
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 500, color: liquiditaDisponibile >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {fmtEur(liquiditaDisponibile)}
+          </div>
+        </div>
+        <hr style={{ margin: '0.75rem 0' }} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', fontSize: 13 }}>
+          <div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Banca + Cassa</div>
+            <div style={{ fontWeight: 500, color: 'var(--green)' }}>{fmtEur(banca)}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Debiti collaboratori</div>
+            <div style={{ fontWeight: 500, color: 'var(--red)' }}>− {fmtEur(totDebitiDipendenti)}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Fondi accantonamento</div>
+            <div style={{ fontWeight: 500, color: 'var(--amber)' }}>− {fmtEur(totFondi)}</div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Saldo IVA (debito-credito)</div>
+            <div style={{ fontWeight: 500, color: ivaNetta > 0 ? 'var(--red)' : 'var(--green)' }}>
+              {ivaNetta > 0 ? '− ' : '+ '}{fmtEur(Math.abs(ivaNetta))}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid-4" style={{ marginBottom: '1.5rem' }}>
         <div className="metric">
-          <div className="metric-label">Liquidità totale</div>
+          <div className="metric-label">Liquidità totale (banca)</div>
           <div className={`metric-value ${banca >= 0 ? 'green' : 'red'}`}>{fmtEur(banca)}</div>
         </div>
         <div className="metric">
@@ -64,7 +114,7 @@ export default function Dashboard({ navigate }) {
         </div>
         <div className="metric">
           <div className="metric-label">Fondi accantonati</div>
-          <div className="metric-value amber">{fmtEur(fondoTasse + fondoContributi)}</div>
+          <div className="metric-value amber">{fmtEur(totFondi)}</div>
         </div>
         <div className="metric">
           <div className="metric-label">Risultato d'esercizio</div>
@@ -80,7 +130,6 @@ export default function Dashboard({ navigate }) {
             { conto: '__cassa', icon: 'ti-cash', color: 'var(--green)', nome: 'Cassa contanti' },
             { conto: '__crediti_clienti', icon: 'ti-file-invoice', color: 'var(--blue)', nome: 'Crediti verso clienti' },
             { conto: '__soci_sott', icon: 'ti-users', color: 'var(--amber)', nome: 'Soci c/sottoscrizione' },
-            { conto: '__soci_dovuti', icon: 'ti-users', color: 'var(--amber)', nome: 'Soci c/versamenti dovuti' },
             { conto: '__attrezzature', icon: 'ti-tool', color: 'var(--text-secondary)', nome: 'Attrezzature' },
             { conto: '__iva_credito', icon: 'ti-receipt-tax', color: 'var(--green)', nome: 'IVA a credito' },
           ].map(({ conto, icon, color, nome }) => (
@@ -112,13 +161,23 @@ export default function Dashboard({ navigate }) {
             </div>
           ))}
           {/* Debiti dipendenti custom */}
-          {Object.entries(saldi).filter(([k]) => !k.startsWith('__') && Math.abs(saldi[k]) > 0).map(([k, v]) => (
-            <div className="cassetto" key={k}>
+          {mastrini.filter(m => m.tipo === 'debito_dipendente' && Math.abs(saldi[String(m.id)] || 0) > 0).map(m => (
+            <div className="cassetto" key={m.id}>
               <div className="cassetto-name">
                 <i className="ti ti-user-dollar" style={{ color: 'var(--amber)', fontSize: 16 }} aria-hidden="true" />
-                {k}
+                {m.nome}
               </div>
-              <div className="cassetto-value" style={{ color: 'var(--amber)' }}>{fmtEur(Math.abs(v))}</div>
+              <div className="cassetto-value" style={{ color: 'var(--amber)' }}>{fmtEur(Math.abs(saldi[String(m.id)] || 0))}</div>
+            </div>
+          ))}
+          {/* Fondi accantonamento custom */}
+          {mastrini.filter(m => m.tipo === 'fondo_accantonamento' && Math.abs(saldi[String(m.id)] || 0) > 0).map(m => (
+            <div className="cassetto" key={m.id}>
+              <div className="cassetto-name">
+                <i className="ti ti-shield" style={{ color: 'var(--amber)', fontSize: 16 }} aria-hidden="true" />
+                {m.nome}
+              </div>
+              <div className="cassetto-value" style={{ color: 'var(--amber)' }}>{fmtEur(Math.abs(saldi[String(m.id)] || 0))}</div>
             </div>
           ))}
         </div>
