@@ -23,8 +23,8 @@ export default function Dashboard({ navigate }) {
   const saldi = calcolaSaldi(movimenti)
 
   const banca = (saldi['__banca'] || 0) + (saldi['__cassa'] || 0)
-  const ivaDebito = saldi['__iva_debito'] || 0
-  const ivaCredito = saldi['__iva_credito'] || 0
+  const ivaDebito = Math.abs(saldi['__iva_debito'] || 0)
+  const ivaCredito = Math.abs(saldi['__iva_credito'] || 0)
   const ivaNetta = ivaDebito - ivaCredito
   const fondoTasse = saldi['__fondo_tasse'] || 0
   const fondoContributi = saldi['__fondo_contributi'] || 0
